@@ -1278,7 +1278,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * If enabled, start up syslogger collection subprocess
 	 */
-	SysLoggerPID = SysLogger_Start();
+	// SysLoggerPID = SysLogger_Start();
 
 	/*
 	 * Reset whereToSendOutput from DestDebug (its starting state) to
@@ -1303,12 +1303,12 @@ PostmasterMain(int argc, char *argv[])
 	 * Initialize stats collection subsystem (this does NOT start the
 	 * collector process!)
 	 */
-	pgstat_init();
+	// pgstat_init();
 
 	/*
 	 * Initialize the autovacuum subsystem (again, no process start yet)
 	 */
-	autovac_init();
+	// autovac_init();
 
 	/*
 	 * Load configuration files for client authentication.
@@ -1374,7 +1374,7 @@ PostmasterMain(int argc, char *argv[])
 	pmState = PM_STARTUP;
 
 	/* Some workers may be scheduled to start now */
-	maybe_start_bgworkers();
+	// maybe_start_bgworkers();
 
 	status = ServerLoop();
 
@@ -1716,9 +1716,11 @@ ServerLoop(void)
 			}
 		}
 
+		ereport(LOG, (errmsg("loop once! selres = %d", selres)));
+
 		/* If we have lost the log collector, try to start a new one */
-		if (SysLoggerPID == 0 && Logging_collector)
-			SysLoggerPID = SysLogger_Start();
+		// if (SysLoggerPID == 0 && Logging_collector)
+		// 	SysLoggerPID = SysLogger_Start();
 
 		/*
 		 * If no background writer process is running, and we are not in a
@@ -1728,8 +1730,8 @@ ServerLoop(void)
 		if (pmState == PM_RUN || pmState == PM_RECOVERY ||
 			pmState == PM_HOT_STANDBY)
 		{
-			if (CheckpointerPID == 0)
-				CheckpointerPID = StartCheckpointer();
+			// if (CheckpointerPID == 0)
+			// 	CheckpointerPID = StartCheckpointer();
 			if (BgWriterPID == 0)
 				BgWriterPID = StartBackgroundWriter();
 		}
@@ -1752,19 +1754,19 @@ ServerLoop(void)
 			(AutoVacuumingActive() || start_autovac_launcher) &&
 			pmState == PM_RUN)
 		{
-			AutoVacPID = StartAutoVacLauncher();
+			// AutoVacPID = StartAutoVacLauncher();
 			if (AutoVacPID != 0)
 				start_autovac_launcher = false; /* signal processed */
 		}
 
 		/* If we have lost the stats collector, try to start a new one */
-		if (PgStatPID == 0 &&
-			(pmState == PM_RUN || pmState == PM_HOT_STANDBY))
-			PgStatPID = pgstat_start();
+		// if (PgStatPID == 0 &&
+		// 	(pmState == PM_RUN || pmState == PM_HOT_STANDBY))
+		// 	PgStatPID = pgstat_start();
 
 		/* If we have lost the archiver, try to start a new one. */
-		if (PgArchPID == 0 && PgArchStartupAllowed())
-			PgArchPID = pgarch_start();
+		// if (PgArchPID == 0 && PgArchStartupAllowed())
+		// 	PgArchPID = pgarch_start();
 
 		/* If we need to signal the autovacuum launcher, do so now */
 		if (avlauncher_needs_signal)
@@ -1778,8 +1780,11 @@ ServerLoop(void)
 		if (WalReceiverRequested)
 			MaybeStartWalReceiver();
 
+		if (StartWorkerNeeded)
+			StartWorkerNeeded = false;
+
 		/* Get other worker processes running, if needed */
-		if (StartWorkerNeeded || HaveCrashedWorker)
+		if (HaveCrashedWorker)
 			maybe_start_bgworkers();
 
 #ifdef HAVE_PTHREAD_IS_THREADED_NP
@@ -2862,8 +2867,8 @@ reaper(SIGNAL_ARGS)
 			 * when we entered consistent recovery state.  It doesn't matter
 			 * if this fails, we'll just try again later.
 			 */
-			if (CheckpointerPID == 0)
-				CheckpointerPID = StartCheckpointer();
+			// if (CheckpointerPID == 0)
+			// 	CheckpointerPID = StartCheckpointer();
 			if (BgWriterPID == 0)
 				BgWriterPID = StartBackgroundWriter();
 			if (WalWriterPID == 0)
@@ -2873,15 +2878,15 @@ reaper(SIGNAL_ARGS)
 			 * Likewise, start other special children as needed.  In a restart
 			 * situation, some of them may be alive already.
 			 */
-			if (!IsBinaryUpgrade && AutoVacuumingActive() && AutoVacPID == 0)
-				AutoVacPID = StartAutoVacLauncher();
-			if (PgArchStartupAllowed() && PgArchPID == 0)
-				PgArchPID = pgarch_start();
-			if (PgStatPID == 0)
-				PgStatPID = pgstat_start();
+			// if (!IsBinaryUpgrade && AutoVacuumingActive() && AutoVacPID == 0)
+			// 	AutoVacPID = StartAutoVacLauncher();
+			// if (PgArchStartupAllowed() && PgArchPID == 0)
+			// 	PgArchPID = pgarch_start();
+			// if (PgStatPID == 0)
+			// 	PgStatPID = pgstat_start();
 
 			/* workers may be scheduled to start now */
-			maybe_start_bgworkers();
+			// maybe_start_bgworkers();
 
 			/* at this point we are really open for business */
 			ereport(LOG,
