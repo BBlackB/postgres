@@ -1730,8 +1730,8 @@ ServerLoop(void)
 		{
 			if (CheckpointerPID == 0)
 				CheckpointerPID = StartCheckpointer();
-			if (BgWriterPID == 0)
-				BgWriterPID = StartBackgroundWriter();
+			// if (BgWriterPID == 0)
+			// 	BgWriterPID = StartBackgroundWriter();
 		}
 
 		/*
@@ -1739,8 +1739,8 @@ ServerLoop(void)
 		 * one.  But this is needed only in normal operation (else we cannot
 		 * be writing any new WAL).
 		 */
-		if (WalWriterPID == 0 && pmState == PM_RUN)
-			WalWriterPID = StartWalWriter();
+		// if (WalWriterPID == 0 && pmState == PM_RUN)
+		// 	WalWriterPID = StartWalWriter();
 
 		/*
 		 * If we have lost the autovacuum launcher, try to start a new one. We
@@ -2864,10 +2864,10 @@ reaper(SIGNAL_ARGS)
 			 */
 			if (CheckpointerPID == 0)
 				CheckpointerPID = StartCheckpointer();
-			if (BgWriterPID == 0)
-				BgWriterPID = StartBackgroundWriter();
-			if (WalWriterPID == 0)
-				WalWriterPID = StartWalWriter();
+			// if (BgWriterPID == 0)
+			// 	BgWriterPID = StartBackgroundWriter();
+			// if (WalWriterPID == 0)
+			// 	WalWriterPID = StartWalWriter();
 
 			/*
 			 * Likewise, start other special children as needed.  In a restart
