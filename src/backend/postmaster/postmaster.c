@@ -955,7 +955,8 @@ PostmasterMain(int argc, char *argv[])
 	 * so it must happen before opening sockets so that at exit, the socket
 	 * lockfiles go away after CloseServerPorts runs.
 	 */
-	CreateDataDirLockFile(true);
+	// FIXME:不生成postmaster.pid文件
+	// CreateDataDirLockFile(true);
 
 	/*
 	 * Read the control file (for error checking and config info).
@@ -1009,64 +1010,65 @@ PostmasterMain(int argc, char *argv[])
 
 	on_proc_exit(CloseServerPorts, 0);
 
-	if (ListenAddresses)
-	{
-		char	   *rawstring;
-		List	   *elemlist;
-		ListCell   *l;
-		int			success = 0;
+	// FIXME:不开启任何监听端口
+	// if (ListenAddresses)
+	// {
+	// 	char	   *rawstring;
+	// 	List	   *elemlist;
+	// 	ListCell   *l;
+	// 	int			success = 0;
 
-		/* Need a modifiable copy of ListenAddresses */
-		rawstring = pstrdup(ListenAddresses);
+	// 	/* Need a modifiable copy of ListenAddresses */
+	// 	rawstring = pstrdup(ListenAddresses);
 
-		/* Parse string into list of hostnames */
-		if (!SplitIdentifierString(rawstring, ',', &elemlist))
-		{
-			/* syntax error in list */
-			ereport(FATAL,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("invalid list syntax in parameter \"%s\"",
-							"listen_addresses")));
-		}
+	// 	/* Parse string into list of hostnames */
+	// 	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	// 	{
+	// 		/* syntax error in list */
+	// 		ereport(FATAL,
+	// 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+	// 				 errmsg("invalid list syntax in parameter \"%s\"",
+	// 						"listen_addresses")));
+	// 	}
 
-		foreach(l, elemlist)
-		{
-			char	   *curhost = (char *) lfirst(l);
+	// 	foreach(l, elemlist)
+	// 	{
+	// 		char	   *curhost = (char *) lfirst(l);
 
-			if (strcmp(curhost, "*") == 0)
-				status = StreamServerPort(AF_UNSPEC, NULL,
-										  (unsigned short) PostPortNumber,
-										  NULL,
-										  ListenSocket, MAXLISTEN);
-			else
-				status = StreamServerPort(AF_UNSPEC, curhost,
-										  (unsigned short) PostPortNumber,
-										  NULL,
-										  ListenSocket, MAXLISTEN);
+	// 		if (strcmp(curhost, "*") == 0)
+	// 			status = StreamServerPort(AF_UNSPEC, NULL,
+	// 									  (unsigned short) PostPortNumber,
+	// 									  NULL,
+	// 									  ListenSocket, MAXLISTEN);
+	// 		else
+	// 			status = StreamServerPort(AF_UNSPEC, curhost,
+	// 									  (unsigned short) PostPortNumber,
+	// 									  NULL,
+	// 									  ListenSocket, MAXLISTEN);
 
-			if (status == STATUS_OK)
-			{
-				success++;
-				/* record the first successful host addr in lockfile */
-				if (!listen_addr_saved)
-				{
-					AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, curhost);
-					listen_addr_saved = true;
-				}
-			}
-			else
-				ereport(WARNING,
-						(errmsg("could not create listen socket for \"%s\"",
-								curhost)));
-		}
+	// 		if (status == STATUS_OK)
+	// 		{
+	// 			success++;
+	// 			/* record the first successful host addr in lockfile */
+	// 			if (!listen_addr_saved)
+	// 			{
+	// 				AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, curhost);
+	// 				listen_addr_saved = true;
+	// 			}
+	// 		}
+	// 		else
+	// 			ereport(WARNING,
+	// 					(errmsg("could not create listen socket for \"%s\"",
+	// 							curhost)));
+	// 	}
 
-		if (!success && elemlist != NIL)
-			ereport(FATAL,
-					(errmsg("could not create any TCP/IP sockets")));
+	// 	if (!success && elemlist != NIL)
+	// 		ereport(FATAL,
+	// 				(errmsg("could not create any TCP/IP sockets")));
 
-		list_free(elemlist);
-		pfree(rawstring);
-	}
+	// 	list_free(elemlist);
+	// 	pfree(rawstring);
+	// }
 
 #ifdef USE_BONJOUR
 	/* Register for Bonjour only if we opened TCP socket(s) */
@@ -1107,71 +1109,71 @@ PostmasterMain(int argc, char *argv[])
 #endif
 
 #ifdef HAVE_UNIX_SOCKETS
-	if (Unix_socket_directories)
-	{
-		char	   *rawstring;
-		List	   *elemlist;
-		ListCell   *l;
-		int			success = 0;
+	// if (Unix_socket_directories)
+	// {
+	// 	char	   *rawstring;
+	// 	List	   *elemlist;
+	// 	ListCell   *l;
+	// 	int			success = 0;
 
-		/* Need a modifiable copy of Unix_socket_directories */
-		rawstring = pstrdup(Unix_socket_directories);
+	// 	/* Need a modifiable copy of Unix_socket_directories */
+	// 	rawstring = pstrdup(Unix_socket_directories);
 
-		/* Parse string into list of directories */
-		if (!SplitDirectoriesString(rawstring, ',', &elemlist))
-		{
-			/* syntax error in list */
-			ereport(FATAL,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("invalid list syntax in parameter \"%s\"",
-							"unix_socket_directories")));
-		}
+	// 	/* Parse string into list of directories */
+	// 	if (!SplitDirectoriesString(rawstring, ',', &elemlist))
+	// 	{
+	// 		/* syntax error in list */
+	// 		ereport(FATAL,
+	// 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+	// 				 errmsg("invalid list syntax in parameter \"%s\"",
+	// 						"unix_socket_directories")));
+	// 	}
 
-		foreach(l, elemlist)
-		{
-			char	   *socketdir = (char *) lfirst(l);
+	// 	foreach(l, elemlist)
+	// 	{
+	// 		char	   *socketdir = (char *) lfirst(l);
 
-			status = StreamServerPort(AF_UNIX, NULL,
-									  (unsigned short) PostPortNumber,
-									  socketdir,
-									  ListenSocket, MAXLISTEN);
+	// 		status = StreamServerPort(AF_UNIX, NULL,
+	// 								  (unsigned short) PostPortNumber,
+	// 								  socketdir,
+	// 								  ListenSocket, MAXLISTEN);
 
-			if (status == STATUS_OK)
-			{
-				success++;
-				/* record the first successful Unix socket in lockfile */
-				if (success == 1)
-					AddToDataDirLockFile(LOCK_FILE_LINE_SOCKET_DIR, socketdir);
-			}
-			else
-				ereport(WARNING,
-						(errmsg("could not create Unix-domain socket in directory \"%s\"",
-								socketdir)));
-		}
+	// 		if (status == STATUS_OK)
+	// 		{
+	// 			success++;
+	// 			/* record the first successful Unix socket in lockfile */
+	// 			if (success == 1)
+	// 				AddToDataDirLockFile(LOCK_FILE_LINE_SOCKET_DIR, socketdir);
+	// 		}
+	// 		else
+	// 			ereport(WARNING,
+	// 					(errmsg("could not create Unix-domain socket in directory \"%s\"",
+	// 							socketdir)));
+	// 	}
 
-		if (!success && elemlist != NIL)
-			ereport(FATAL,
-					(errmsg("could not create any Unix-domain sockets")));
+	// 	if (!success && elemlist != NIL)
+	// 		ereport(FATAL,
+	// 				(errmsg("could not create any Unix-domain sockets")));
 
-		list_free_deep(elemlist);
-		pfree(rawstring);
-	}
+	// 	list_free_deep(elemlist);
+	// 	pfree(rawstring);
+	// }
 #endif
 
 	/*
 	 * check that we have some socket to listen on
 	 */
-	if (ListenSocket[0] == PGINVALID_SOCKET)
-		ereport(FATAL,
-				(errmsg("no socket created for listening")));
+	// if (ListenSocket[0] == PGINVALID_SOCKET)
+	// 	ereport(FATAL,
+	// 			(errmsg("no socket created for listening")));
 
 	/*
 	 * If no valid TCP ports, write an empty line for listen address,
 	 * indicating the Unix socket must be used.  Note that this line is not
 	 * added to the lock file until there is a socket backing it.
 	 */
-	if (!listen_addr_saved)
-		AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, "");
+	// if (!listen_addr_saved)
+	// 	AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, "");
 
 	/*
 	 * Set up shared memory and semaphores.
@@ -1834,28 +1836,30 @@ ServerLoop(void)
 		 * starting a new postmaster.  Data corruption is likely to ensue from
 		 * that anyway, but we can minimize the damage by aborting ASAP.
 		 */
-		if (now - last_lockfile_recheck_time >= 1 * SECS_PER_MINUTE)
-		{
-			if (!RecheckDataDirLockFile())
-			{
-				ereport(LOG,
-						(errmsg("performing immediate shutdown because data directory lock file is invalid")));
-				kill(MyProcPid, SIGQUIT);
-			}
-			last_lockfile_recheck_time = now;
-		}
+		// FIXME:不检查data文件夹的锁文件
+		// if (now - last_lockfile_recheck_time >= 1 * SECS_PER_MINUTE)
+		// {
+		// 	if (!RecheckDataDirLockFile())
+		// 	{
+		// 		ereport(LOG,
+		// 				(errmsg("performing immediate shutdown because data directory lock file is invalid")));
+		// 		kill(MyProcPid, SIGQUIT);
+		// 	}
+		// 	last_lockfile_recheck_time = now;
+		// }
 
 		/*
 		 * Touch Unix socket and lock files every 58 minutes, to ensure that
 		 * they are not removed by overzealous /tmp-cleaning tasks.  We assume
 		 * no one runs cleaners with cutoff times of less than an hour ...
 		 */
-		if (now - last_touch_time >= 58 * SECS_PER_MINUTE)
-		{
-			TouchSocketFiles();
-			TouchSocketLockFiles();
-			last_touch_time = now;
-		}
+		// FIXME:不检查socket的锁文件
+		// if (now - last_touch_time >= 58 * SECS_PER_MINUTE)
+		// {
+		// 	TouchSocketFiles();
+		// 	TouchSocketLockFiles();
+		// 	last_touch_time = now;
+		// }
 	}
 }
 
