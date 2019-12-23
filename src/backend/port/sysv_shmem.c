@@ -598,17 +598,20 @@ PGSharedMemoryCreate(Size size, bool makePrivate, int port,
 	for (NextShmemSegID++;; NextShmemSegID++)
 	{
 		/* Try to create new segment */
-		memAddress = InternalIpcMemoryCreate(NextShmemSegID, sysvsize);
-		if (memAddress)
-			break;				/* successful create and attach */
+		// memAddress = InternalIpcMemoryCreate(NextShmemSegID, sysvsize);
+		// if (memAddress)
+		// 	break;				/* successful create and attach */
 
-		/* Check shared memory and possibly remove and recreate */
+		// /* Check shared memory and possibly remove and recreate */
 
-		if (makePrivate)		/* a standalone backend shouldn't do this */
-			continue;
+		// if (makePrivate)		/* a standalone backend shouldn't do this */
+		// 	continue;
 
 		if ((memAddress = PGSharedMemoryAttach(NextShmemSegID, &shmid)) == NULL)
 			continue;			/* can't attach, not one of mine */
+
+		ereport(LOG, (errmsg("attach success.")));
+		break;
 
 		/*
 		 * If I am not the creator and it belongs to an extant process,
@@ -657,28 +660,28 @@ PGSharedMemoryCreate(Size size, bool makePrivate, int port,
 	 * can't see the header as valid but belonging to an invalid PID!
 	 */
 	hdr = (PGShmemHeader *) memAddress;
-	hdr->creatorPID = getpid();
-	hdr->magic = PGShmemMagic;
-	hdr->dsm_control = 0;
+	// hdr->creatorPID = getpid();
+	// hdr->magic = PGShmemMagic;
+	// hdr->dsm_control = 0;
 
-	/* Fill in the data directory ID info, too */
-	if (stat(DataDir, &statbuf) < 0)
-		ereport(FATAL,
-				(errcode_for_file_access(),
-				 errmsg("could not stat data directory \"%s\": %m",
-						DataDir)));
-	hdr->device = statbuf.st_dev;
-	hdr->inode = statbuf.st_ino;
+	// /* Fill in the data directory ID info, too */
+	// if (stat(DataDir, &statbuf) < 0)
+	// 	ereport(FATAL,
+	// 			(errcode_for_file_access(),
+	// 			 errmsg("could not stat data directory \"%s\": %m",
+	// 					DataDir)));
+	// hdr->device = statbuf.st_dev;
+	// hdr->inode = statbuf.st_ino;
 
-	/*
-	 * Initialize space allocation status for segment.
-	 */
-	hdr->totalsize = size;
-	hdr->freeoffset = MAXALIGN(sizeof(PGShmemHeader));
+	// /*
+	//  * Initialize space allocation status for segment.
+	//  */
+	// hdr->totalsize = size;
+	// hdr->freeoffset = MAXALIGN(sizeof(PGShmemHeader));
 	*shim = hdr;
 
-	/* Save info for possible future use */
-	UsedShmemSegAddr = memAddress;
+	// /* Save info for possible future use */
+	// UsedShmemSegAddr = memAddress;
 	UsedShmemSegID = (unsigned long) NextShmemSegID;
 
 	/*
@@ -823,7 +826,8 @@ PGSharedMemoryAttach(IpcMemoryKey key, IpcMemoryId *shmid)
 {
 	PGShmemHeader *hdr;
 
-	if ((*shmid = shmget(key, sizeof(PGShmemHeader), 0)) < 0)
+	// if ((*shmid = shmget(key, sizeof(PGShmemHeader), 0)) < 0)
+	if ((*shmid = shmget(key, 0, 0)) < 0)
 		return NULL;
 
 	hdr = (PGShmemHeader *) shmat(*shmid, UsedShmemSegAddr, PG_SHMAT_FLAGS);
