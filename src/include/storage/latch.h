@@ -173,6 +173,8 @@ extern int WaitEventSetWait(WaitEventSet *set, long timeout,
 				 uint32 wait_event_info);
 extern int WaitLatch(volatile Latch *latch, int wakeEvents, long timeout,
 		  uint32 wait_event_info);
+// NOTE:增加监听socket
+extern int WaitLatchWithSocket(volatile Latch *latch, int wakeEvents, int sock, long timeout, uint32 wait_event_info);
 extern int WaitLatchOrSocket(volatile Latch *latch, int wakeEvents,
 				  pgsocket sock, long timeout, uint32 wait_event_info);
 

@@ -52,6 +52,9 @@
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
 
+#include "libpq/libpq-be.h"
+
+WaitEventSet *WaitSet = NULL;
 /*
  * Select the fd readiness primitive to use. Normally the "most modern"
  * primitive supported by the OS will be used, but for testing it can be
@@ -340,6 +343,92 @@ WaitLatch(volatile Latch *latch, int wakeEvents, long timeout,
 							 wait_event_info);
 }
 
+// NOTE:带socket的监听
+int WaitLatchWithSocket(volatile Latch *latch, int wakeEvents, pgsocket sock, long timeout, uint32 wait_event_info)
+{
+	return WaitLatchOrSocket(latch, wakeEvents, sock, timeout, wait_event_info);
+}
+
+/*
+ * ConnFree -- free a local connection data structure
+ */
+static void
+ConnFree(Port *conn)
+{
+#ifdef USE_SSL
+	secure_close(conn);
+#endif
+	if (conn->gss)
+		free(conn->gss);
+	free(conn);
+}
+
+/*
+ * ConnCreate -- create a local connection data structure
+ *
+ * Returns NULL on failure, other than out-of-memory which is fatal.
+ */
+static Port *
+ConnCreate(int serverFd)
+{
+	Port	   *port;
+
+	if (!(port = (Port *) calloc(1, sizeof(Port))))
+	{
+		ereport(LOG,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+	}
+
+	if (StreamConnection(serverFd, port) != STATUS_OK)
+	{
+		if (port->sock != PGINVALID_SOCKET)
+			StreamClose(port->sock);
+		ConnFree(port);
+		return NULL;
+	}
+
+	/*
+	 * Allocate GSSAPI specific state struct
+	 */
+#ifndef EXEC_BACKEND
+#if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
+	port->gss = (pg_gssinfo *) calloc(1, sizeof(pg_gssinfo));
+	if (!port->gss)
+	{
+		ereport(LOG,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+	}
+#endif
+#endif
+
+	return port;
+}
+
+int HandleSocketEvents(WaitEvent* event)
+{
+	static const int BUFFER_SIZE = 1024;
+	char msg[BUFFER_SIZE];
+	memset(msg, 0, BUFFER_SIZE);
+	int ret;
+	ret = recv(event->fd, msg, BUFFER_SIZE, 0);
+	if (ret < 0)
+	{
+		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+			return 0;
+
+		ereport(ERROR, (errmsg("recv failed: socket fd = %d, errno = %d", event->fd, errno)));
+	}
+	else if (ret == 0)
+	{
+		StreamClose(event->fd);
+		DelWaitEvent(WaitSet, event->pos, WL_SOCKET_READABLE, WaitSet->latch);
+	}
+	ereport(LOG, (errmsg("WAL received massage: %s", msg)));
+	
+}
+
 /*
  * Like WaitLatch, but with an extra socket argument for WL_SOCKET_*
  * conditions.
@@ -359,30 +448,62 @@ WaitLatchOrSocket(volatile Latch *latch, int wakeEvents, pgsocket sock,
 	int			ret = 0;
 	int			rc;
 	WaitEvent	event;
-	WaitEventSet *set = CreateWaitEventSet(CurrentMemoryContext, 3);
-
-	if (wakeEvents & WL_TIMEOUT)
-		Assert(timeout >= 0);
-	else
-		timeout = -1;
-
-	if (wakeEvents & WL_LATCH_SET)
-		AddWaitEventToSet(set, WL_LATCH_SET, PGINVALID_SOCKET,
-						  (Latch *) latch, NULL);
-
-	if (wakeEvents & WL_POSTMASTER_DEATH && IsUnderPostmaster)
-		AddWaitEventToSet(set, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
-						  NULL, NULL);
-
-	if (wakeEvents & WL_SOCKET_MASK)
+	if (WaitSet == NULL)
 	{
-		int			ev;
+		WaitSet = CreateWaitEventSet(CurrentMemoryContext, 8);
 
-		ev = wakeEvents & WL_SOCKET_MASK;
-		AddWaitEventToSet(set, ev, sock, NULL, NULL);
+		if (wakeEvents & WL_TIMEOUT)
+			Assert(timeout >= 0);
+		else
+			timeout = -1;
+
+		if (wakeEvents & WL_LATCH_SET)
+			AddWaitEventToSet(WaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
+							(Latch *) latch, NULL);
+
+		if (wakeEvents & WL_POSTMASTER_DEATH && IsUnderPostmaster)
+			AddWaitEventToSet(WaitSet, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
+							NULL, NULL);
+
+		if (wakeEvents & WL_SOCKET_MASK)
+		{
+			int			ev;
+
+			ev = wakeEvents & WL_SOCKET_MASK;
+			// ereport(LOG, (errmsg("SOCKET ON, ev = %d", ev)));
+			AddWaitEventToSet(WaitSet, ev, sock, NULL, NULL);
+		}
+		else
+		{
+			// ereport(LOG, (errmsg("SOCKET OFF")));
+		}
 	}
 
-	rc = WaitEventSetWait(set, timeout, &event, 1, wait_event_info);
+	rc = WaitEventSetWait(WaitSet, timeout, &event, 1, wait_event_info);
+
+	// NOTE:WAL 才有sock判断
+	if (sock != PGINVALID_SOCKET)
+	{
+		// 建立连接，并让epoll监听
+		if (event.fd == sock)
+		{
+			Port* port = ConnCreate(sock);
+			if (port)
+			{
+				ereport(LOG, (errmsg("WAL unix socket(%d) connection established.", port->sock)));
+			}
+			else
+			{
+				ereport(LOG, (errmsg("WAL unix socket connection accept failed.")));
+			}
+			AddWaitEventToSet(WaitSet, WL_SOCKET_READABLE, port->sock, NULL, NULL);
+		}
+		else if (event.fd != 0 && event.fd != PGINVALID_SOCKET)
+		{
+			HandleSocketEvents(&event);
+			ereport(LOG, (errmsg("this should recv message from %d", event.fd)));
+		}
+	}
 
 	if (rc == 0)
 		ret |= WL_TIMEOUT;
@@ -393,7 +514,7 @@ WaitLatchOrSocket(volatile Latch *latch, int wakeEvents, pgsocket sock,
 							   WL_SOCKET_MASK);
 	}
 
-	FreeWaitEventSet(set);
+	// FreeWaitEventSet(WaitSet);
 
 	return ret;
 }
@@ -714,6 +835,7 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 #endif
 	}
 
+	ereport(LOG, (errmsg("epoll add fd = %d", event->fd)));
 	/* perform wait primitive specific initialization, if needed */
 #if defined(WAIT_USE_EPOLL)
 	WaitEventAdjustEpoll(set, event, EPOLL_CTL_ADD);
@@ -773,6 +895,54 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 
 #if defined(WAIT_USE_EPOLL)
 	WaitEventAdjustEpoll(set, event, EPOLL_CTL_MOD);
+#elif defined(WAIT_USE_POLL)
+	WaitEventAdjustPoll(set, event);
+#elif defined(WAIT_USE_WIN32)
+	WaitEventAdjustWin32(set, event);
+#endif
+}
+
+void
+DelWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
+{
+	WaitEvent  *event;
+
+	Assert(pos < set->nevents);
+
+	event = &set->events[pos];
+
+	/*
+	 * If neither the event mask nor the associated latch changes, return
+	 * early. That's an important optimization for some sockets, where
+	 * ModifyWaitEvent is frequently used to switch from waiting for reads to
+	 * waiting on writes.
+	 */
+	if (events == event->events &&
+		(!(event->events & WL_LATCH_SET) || set->latch == latch))
+		return;
+
+	if (event->events & WL_LATCH_SET &&
+		events != event->events)
+	{
+		/* we could allow to disable latch events for a while */
+		elog(ERROR, "cannot modify latch event");
+	}
+
+	if (event->events & WL_POSTMASTER_DEATH)
+	{
+		elog(ERROR, "cannot modify postmaster death event");
+	}
+
+	/* FIXME: validate event mask */
+	event->events = events;
+
+	if (events == WL_LATCH_SET)
+	{
+		set->latch = latch;
+	}
+
+#if defined(WAIT_USE_EPOLL)
+	WaitEventAdjustEpoll(set, event, EPOLL_CTL_DEL);
 #elif defined(WAIT_USE_POLL)
 	WaitEventAdjustPoll(set, event);
 #elif defined(WAIT_USE_WIN32)

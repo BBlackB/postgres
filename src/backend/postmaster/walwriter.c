@@ -61,6 +61,10 @@
 #include "utils/memutils.h"
 #include "utils/resowner.h"
 
+#include "libpq/libpq.h"
+
+static	pgsocket ListenSocket[64];
+int maxListenPos = 0;
 
 /*
  * GUC parameters
@@ -101,6 +105,7 @@ WalWriterMain(void)
 	MemoryContext walwriter_context;
 	int			left_till_hibernate;
 	bool		hibernating;
+	int index = 0;
 
 	/*
 	 * Properly accept or ignore signals the postmaster might send us
@@ -231,6 +236,24 @@ WalWriterMain(void)
 	 */
 	ProcGlobal->walwriterLatch = &MyProc->procLatch;
 
+	// FIXME:增加unix domain监听
+#ifdef HAVE_UNIX_SOCKETS
+	const char* socketdir = "/tmp";
+	const int MAXLISTEN = 64;
+
+	for (index = 0; index < 64; ++index)
+		ListenSocket[index] = PGINVALID_SOCKET;
+
+	int status = StreamServerPort(AF_UNIX, NULL, 55432, socketdir, ListenSocket, MAXLISTEN);
+	if (status == STATUS_OK)
+		ereport(LOG, (errmsg("create Unix-domain socket for WAL writer success in %s!", socketdir)));
+	else
+		ereport(LOG, (errmsg("could not create Unix-domain socket  for WAL writer in %s!", socketdir)));
+
+		ereport(LOG, (errmsg("ListenSocket[0] = %d", ListenSocket[0])));
+
+#endif
+
 	/*
 	 * Loop forever
 	 */
@@ -290,10 +313,17 @@ WalWriterMain(void)
 		else
 			cur_timeout = WalWriterDelay * HIBERNATE_FACTOR;
 
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   cur_timeout,
-					   WAIT_EVENT_WAL_WRITER_MAIN);
+		// rc = WaitLatch(MyLatch,
+		// 			   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+		// 			   cur_timeout,
+		// 			   WAIT_EVENT_WAL_WRITER_MAIN);
+		
+		rc = WaitLatchWithSocket(MyLatch,
+				WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH | WL_SOCKET_READABLE, ListenSocket[maxListenPos],
+				cur_timeout,
+				WAIT_EVENT_WAL_WRITER_MAIN);
+
+		// ereport(LOG, (errmsg("WAL wake up once!")));
 
 		/*
 		 * Emergency bailout if postmaster has died.  This is to avoid the
