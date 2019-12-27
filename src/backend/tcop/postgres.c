@@ -106,6 +106,8 @@ int			PostAuthDelay = 0;
  *		private variables
  * ----------------
  */
+// 与WAL连接的socket fd
+int sock_fd = PGINVALID_SOCKET;
 
 /* max_stack_depth converted to bytes for speed of checking */
 static long max_stack_depth_bytes = 100 * 1024L;
@@ -2685,6 +2687,7 @@ die(SIGNAL_ARGS)
 		ProcessInterrupts();
 
 	errno = save_errno;
+	if (sock_fd > 0) close(sock_fd);
 }
 
 /*
@@ -3636,6 +3639,11 @@ PostgresMain(int argc, char *argv[],
 	sigjmp_buf	local_sigjmp_buf;
 	volatile bool send_ready_for_query = true;
 	bool		disable_idle_in_transaction_timeout = false;
+	// unix socket路径
+	char socket_path[128];
+	// 用于测试的消息
+	const int BUFFER_SIZE = 1024;
+	const char *test_message = "Hello, this is the message from postgres by unix socket.";
 
 	/* Initialize startup process environment if necessary. */
 	if (!IsUnderPostmaster)
@@ -4006,6 +4014,28 @@ PostgresMain(int argc, char *argv[],
 	if (!ignore_till_sync)
 		send_ready_for_query = true;	/* initially, or after error */
 
+	// NOTE:通过unix-domain套接字连接存储层
+	UNIXSOCK_PATH(socket_path, 55432, "/tmp");
+	ereport(LOG, (errmsg("ready to connect socket path: %s", socket_path)));
+	struct sockaddr_un un;
+	un.sun_family = AF_UNIX;
+	strcpy(un.sun_path, socket_path);
+	sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	// MyProcPort->sock = sock_fd;
+	// ereport(LOG, (errmsg("MyProcProt->sock = %d, sock_fd = %d", MyProcPort->sock, sock_fd)));
+
+	if (sock_fd < 0)
+	{
+		ereport(ERROR, (errmsg("create unix socket failed.")));
+	}
+	
+	if (connect(sock_fd, (struct sockaddr *)&un, sizeof(un)) < 0)
+	{
+		ereport(WARNING, (errmsg("connect to unix socket failed.")));
+	}
+	else
+		send(sock_fd, test_message, strlen(test_message), 0);
+
 	/*
 	 * Non-error queries loop here.
 	 */
@@ -4294,6 +4324,9 @@ PostgresMain(int argc, char *argv[],
 											close_type)));
 							break;
 					}
+
+					// 退出时关闭socket_fd
+					if (sock_fd > 0) close(sock_fd);
 
 					if (whereToSendOutput == DestRemote)
 						pq_putemptymessage('3');	/* CloseComplete */

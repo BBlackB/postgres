@@ -32,6 +32,9 @@
 #include "utils/memutils.h"
 #include "pg_trace.h"
 
+#include "libpq/libpq.h"
+#include "libpq/pqformat.h"
+
 /* Buffer size required to store a compressed version of backup block image */
 #define PGLZ_MAX_BLCKSZ PGLZ_MAX_OUTPUT(BLCKSZ)
 
@@ -59,6 +62,8 @@ typedef struct
 	/* buffer to store a compressed version of backup block image */
 	char		compressed_page[PGLZ_MAX_BLCKSZ];
 } registered_buffer;
+
+extern int sock_fd;
 
 static registered_buffer *registered_buffers;
 static int	max_registered_buffers; /* allocated size */
@@ -448,6 +453,10 @@ XLogInsert(RmgrId rmid, uint8 info)
 		bool		doPageWrites;
 		XLogRecPtr	fpw_lsn;
 		XLogRecData *rdt;
+		XLogRecData *rrdt;
+		StringInfoData output_message;
+		StringInfoData tmpbuf;
+		int total_num = 0;
 
 		/*
 		 * Get values needed to decide whether to do full-page writes. Since
@@ -458,6 +467,29 @@ XLogInsert(RmgrId rmid, uint8 info)
 
 		rdt = XLogRecordAssemble(rmid, info, RedoRecPtr, doPageWrites,
 								 &fpw_lsn);
+
+		rrdt = rdt;
+		// TODO:将xlog发送到存储端
+		// send()
+		initStringInfo(&output_message);
+		initStringInfo(&tmpbuf);
+		pq_sendbyte(&output_message, 'W');
+		pq_sendint64(&output_message, 0); // 有多少个节点
+		pq_sendint64(&output_message, fpw_lsn);
+		pq_sendint64(&output_message, curinsert_flags);
+		for (;rrdt != NULL; rrdt = rrdt->next)
+		{			
+			ereport(LOG, (errmsg("XLogRecData data = %s, lenth = %d", rrdt->data, rrdt->len)));
+			pq_sendint64(&output_message, rrdt->len);
+			pq_sendstring(&output_message, rrdt->data);
+			output_message.len += rrdt->len;
+			total_num++;
+		}
+		output_message.data[output_message.len] = '\0';
+		pq_sendint64(&tmpbuf, total_num);
+		memcpy(&output_message.data[1], tmpbuf.data, sizeof(int64));
+
+		// send(sock_fd, output_message.data, output_message.len, 0);
 
 		EndPos = XLogInsertRecord(rdt, fpw_lsn, curinsert_flags);
 	} while (EndPos == InvalidXLogRecPtr);
