@@ -2709,6 +2709,7 @@ XLogSendPhysical(void)
 	/*
 	 * OK to read and send the slice.
 	 */
+	// NODE:读取WAL日志并发送!!!!!
 	resetStringInfo(&output_message);
 	pq_sendbyte(&output_message, 'w');
 

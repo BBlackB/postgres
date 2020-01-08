@@ -903,6 +903,7 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len)
 							 errmsg_internal("invalid WAL message received from primary")));
 				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
 
+				// NOTE:收到WAL日志
 				/* read the fields */
 				dataStart = pq_getmsgint64(&incoming_message);
 				walEnd = pq_getmsgint64(&incoming_message);
