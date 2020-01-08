@@ -16,6 +16,7 @@
 
 #include "access/xlogdefs.h"
 
+#include "xlog_internal.h"
 
 /* ----------------
  *		Special transaction ID values
@@ -182,5 +183,7 @@ extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
+
+extern XLogRecPtr XLogInsertRecord(XLogRecData *rdata, XLogRecPtr fpw_lsn, uint8 flags);
 
 #endif							/* TRAMSAM_H */

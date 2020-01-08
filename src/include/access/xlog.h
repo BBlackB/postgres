@@ -224,6 +224,9 @@ extern XLogRecPtr XLogInsertRecord(struct XLogRecData *rdata,
 				 XLogRecPtr fpw_lsn,
 				 uint8 flags);
 extern void XLogFlush(XLogRecPtr RecPtr);
+// 收到消息直接写入xlog
+int XLogPreWrite(int Write, int Flush, int startoffset);
+extern int  XLogRawWrite(char *from, size_t nleft);
 extern bool XLogBackgroundFlush(void);
 extern bool XLogNeedsFlush(XLogRecPtr RecPtr);
 extern int	XLogFileInit(XLogSegNo segno, bool *use_existent, bool use_lock);

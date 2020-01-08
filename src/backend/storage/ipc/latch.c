@@ -52,7 +52,20 @@
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
 
-#include "libpq/libpq-be.h"
+#include "libpq/libpq.h"
+#include "libpq/pqformat.h"
+#include "access/xlog_internal.h"
+#include "access/transam.h"
+
+// 
+#include "access/xlog.h"
+extern struct XLogWrtRqst;
+
+static const int BUFFER_SIZE = 1024 * 32;
+#define DATA_NUM 16
+char *xlogmsg_data[DATA_NUM];
+char *msg;
+
 
 WaitEventSet *WaitSet = NULL;
 /*
@@ -211,6 +224,16 @@ InitializeLatchSupport(void)
 	selfpipe_readfd = pipefd[0];
 	selfpipe_writefd = pipefd[1];
 	selfpipe_owner_pid = MyProcPid;
+
+	// NOTE:初始化buffer大小
+	int i = 0;
+	for (; i < DATA_NUM; ++i)
+	{
+		xlogmsg_data[i] = (char *)malloc(BUFFER_SIZE);
+		memset(xlogmsg_data[i], 0, BUFFER_SIZE);
+	}
+
+	msg = (char *)malloc(BUFFER_SIZE);
 #else
 	/* currently, nothing to do here for Windows */
 #endif
@@ -408,11 +431,12 @@ ConnCreate(int serverFd)
 
 int HandleSocketEvents(WaitEvent* event)
 {
-	static const int BUFFER_SIZE = 1024;
-	char msg[BUFFER_SIZE];
+	StringInfoData incoming_message;
+	initStringInfo(&incoming_message);
 	memset(msg, 0, BUFFER_SIZE);
 	int ret;
-	ret = recv(event->fd, msg, BUFFER_SIZE, 0);
+
+	ret = recv(event->fd, msg, 1, 0);
 	if (ret < 0)
 	{
 		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
@@ -422,11 +446,149 @@ int HandleSocketEvents(WaitEvent* event)
 	}
 	else if (ret == 0)
 	{
+		ereport(WARNING, (errmsg("ready to close the fd = %d", event->fd)));
 		StreamClose(event->fd);
 		DelWaitEvent(WaitSet, event->pos, WL_SOCKET_READABLE, WaitSet->latch);
 	}
-	ereport(LOG, (errmsg("WAL received massage: %s", msg)));
-	
+	else
+	{
+		ereport(LOG, (errmsg("WAL received massage: %s", msg)));
+		
+		char msgtype = msg[0];
+
+		ereport(LOG, (errmsg("WAL received msgtype(%c) incoming_message: %s", msgtype, incoming_message.data)));
+
+		switch (msgtype)
+		{
+		case 'T': // NOTE:仅作协议测试使用
+			{
+				ret = recv(event->fd, msg, BUFFER_SIZE, 0);
+				appendBinaryStringInfo(&incoming_message, msg, ret);
+
+				int total_num = pq_getmsgint64(&incoming_message);
+				XLogRecPtr fpw_lsn = pq_getmsgint64(&incoming_message);
+				uint64 curinsert_flag = pq_getmsgint64(&incoming_message);
+				char data[BUFFER_SIZE];
+
+				ereport(LOG, (errmsg("WAL received massage: msgtype = %c, total_num = %d, fpw_lsn = %d, curinsert_flag = %d", msgtype, total_num, fpw_lsn, curinsert_flag)));
+
+				int index;
+				for (index = 0; index < total_num; ++index)
+				{
+					int len = pq_getmsgint64(&incoming_message);
+					memcpy(msg, &incoming_message.data[incoming_message.cursor], len);
+					msg[len] = '\0';
+
+					ereport(LOG, (errmsg("WAL received massage(len: %d): %s", len, msg)));
+
+					incoming_message.cursor += len;
+				}
+				break;
+			}
+		case 'W': // 本打算在此调用XlogInsertRecord，后因此处与计算层耦合性太强，且不能覆盖所有情况（不调用XLogInsertRecord，直接调用XLogWrite等情况），所以放弃此方案
+			{
+				// 收到xlog写入的相关信息，并调用XLogInsertRecord
+				ret = recv(event->fd, msg, BUFFER_SIZE, 0);
+				appendBinaryStringInfo(&incoming_message, msg, ret);
+
+				int total_num = pq_getmsgint64(&incoming_message);
+				XLogRecPtr fpw_lsn = pq_getmsgint64(&incoming_message);
+				uint64 curinsert_flag = pq_getmsgint64(&incoming_message);
+				int EndPos = 10000;
+				XLogRecData *rdt = NULL, *cur = NULL, *next = NULL;
+
+				ereport(LOG, (errmsg("WAL received massage: msgtype = %c, total_num = %d, fpw_lsn = %d, curinsert_flag = %d, len = %d", msgtype, total_num, fpw_lsn, curinsert_flag, incoming_message.len)));
+
+				int index;
+				for (index = 0; index < total_num; ++index)
+				{
+					int len = pq_getmsgint64(&incoming_message);
+					if (len < 0) continue;
+
+					if (rdt == NULL)
+					{
+						rdt = (XLogRecData *)malloc(sizeof(XLogRecData));
+						cur = rdt;
+					}
+					else
+					{
+						next = (XLogRecData *)malloc(sizeof(XLogRecData));
+						cur->next = next;
+						cur = next;
+					}
+					
+					memcpy(xlogmsg_data[index], incoming_message.data[incoming_message.cursor], len);
+					msg[len] = '\0';
+
+					// FIXME:data应该为XLogRecord类型
+					cur->len = len;
+					cur->data = xlogmsg_data[index];
+					cur->next = NULL;
+
+					incoming_message.cursor += len;
+					ereport(LOG, (errmsg("WAL received massage(len: %d): %s", len, xlogmsg_data[index])));
+				}
+
+				// NOTE:检查构建过程是否存在问题
+				{
+					XLogRecData *rrdt = rdt;
+					while (rrdt)
+					{
+
+						rrdt = rrdt->next;
+					}
+					
+				}
+
+				// 插入xlog
+				EndPos = XLogInsertRecord(rdt, fpw_lsn, curinsert_flag);
+				ereport(LOG, (errmsg("EndPos = %d", EndPos)));
+
+				ret = send(event->fd, EndPos, sizeof(EndPos), 0);
+				if (ret == sizeof(EndPos))
+				{
+					ereport(LOG, (errmsg("send success with endpos = %d", EndPos)));
+				}
+				break;
+			}
+		case 'X': // 直接写入xlog,接收来自计算层在xlogwrite中调用的write函数所写的内容
+				  // 返回写入的结果
+			{
+				ret = recv(event->fd, msg, BUFFER_SIZE, 0);
+				appendBinaryStringInfo(&incoming_message, msg, ret);
+
+				int len = pq_getmsgint64(&incoming_message);
+
+				memcpy(xlogmsg_data[0], &incoming_message.data[incoming_message.cursor], len);
+				int written = XLogRawWrite(xlogmsg_data[0], len);
+				if (written == len)
+					ereport(LOG, (errmsg("XLogRawWrite successful len = %d", len)));
+				else
+					ereport(LOG, (errmsg("XLogRawWrite failed, should write %d, but only %d", len, written)));
+				
+				send(event->fd, &written, sizeof(written), 0);
+
+				break;
+			}
+		case 'S': // 写xlog之前设置文件偏移
+			{
+				ret = recv(event->fd, msg, 3 * sizeof(int64), 0);
+				appendBinaryStringInfo(&incoming_message, msg, ret);
+
+				int Write = pq_getmsgint64(&incoming_message);
+				int Flush = pq_getmsgint64(&incoming_message);
+				int startoffset = pq_getmsgint64(&incoming_message);
+
+				ereport(LOG, (errmsg("msgtype = 'S', Write = %d, Flush = %d, startoffset = %d", Write, Flush, startoffset)));
+				XLogPreWrite(Write, Flush, startoffset);
+
+				break;
+			}
+		default:
+			ereport(WARNING, (errmsg("unkown msgtype: %c", msgtype)));
+			break;
+		}
+	}
 }
 
 /*

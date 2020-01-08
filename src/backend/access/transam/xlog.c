@@ -77,6 +77,9 @@
 #include "pg_trace.h"
 
 extern uint32 bootstrap_data_checksum_version;
+// 访问latch.c中的xlogmsg_data
+#define DATA_NUM 16
+extern char* xlogmsg_data[DATA_NUM];
 
 /* File path names (all relative to $PGDATA) */
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
@@ -2366,6 +2369,74 @@ XLogCheckpointNeeded(XLogSegNo new_segno)
  * must be called before grabbing the lock, to make sure the data is ready to
  * write.
  */
+// 改变xlog文件的偏移量
+int XLogPreWrite(int Write, int Flush, int startoffset)
+{
+	// XLogwrtRqst WriteRqst;
+	// WriteRqst.Write = Write;
+	// WriteRqst.Flush = Flush;
+	// int npages = 0;
+	// int startoffset = 0;
+
+	if (!XLByteInPrevSeg(Write, openLogSegNo, wal_segment_size))
+	{
+		/*
+			* Switch to new logfile segment.  We cannot have any pending
+			* pages here (since we dump what we have at segment end).
+			*/
+		// Assert(npages == 0);
+		if (openLogFile >= 0)
+			XLogFileClose();
+		XLByteToPrevSeg(Write, openLogSegNo, wal_segment_size);
+
+		/* create/use new log file */
+		bool use_existent = true;
+		openLogFile = XLogFileInit(openLogSegNo, &use_existent, true);
+		openLogOff = 0;
+	}
+
+	/* Make sure we have the current logfile open */
+	if (openLogFile < 0)
+	{
+		XLByteToPrevSeg(Write, openLogSegNo,
+						wal_segment_size);
+		openLogFile = XLogFileOpen(openLogSegNo);
+		openLogOff = 0;
+	}
+
+	// startoffset = XLogSegmentOffset(LogwrtResult.Write - XLOG_BLCKSZ,
+	// 							wal_segment_size);
+
+	ereport(LOG, (errmsg("openLogFile = %d, startoffset = %d", openLogFile, startoffset)));
+
+	/* Need to seek in the file? */
+	if (openLogOff != startoffset)
+	{
+		if (lseek(openLogFile, (off_t) startoffset, SEEK_SET) < 0)
+			ereport(PANIC,
+					(errcode_for_file_access(),
+						errmsg("could not seek in log file %s to offset %u: %m, errno = %d",
+							XLogFileNameP(ThisTimeLineID, openLogSegNo),
+							startoffset, errno)));
+		openLogOff = startoffset;
+	}
+}
+
+// 直接写入xlog文件
+int  XLogRawWrite(char *from, size_t nleft)
+{
+	Assert(openLogFile > 0);
+
+	ereport(LOG, (errmsg("strlen(from) = %d", strlen(from))));
+	// FIXME:openLogFile没有打开
+	int written = write(openLogFile, from, nleft);
+	if (written == -1)
+	{
+		ereport(WARNING, (errmsg("XLogRawWrite error, fd = %d, errno = %d",openLogFile,  errno)));
+	}
+	return written;
+}
+
 static void
 XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 {
