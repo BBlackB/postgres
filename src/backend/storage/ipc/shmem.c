@@ -344,12 +344,23 @@ ShmemInitHash(const char *name,		/* table string name for shmem index */
 	 * new space
 	 */
 	if (found)
+	{
 		hash_flags |= HASH_ATTACH;
+		ereport(LOG, (errmsg("shared memory %s found!", name)));
+	}
+	else
+		ereport(LOG, (errmsg("shared memory %s created!", name)));
 
 	/* Pass location of hashtable header to hash_create */
 	infoP->hctl = (HASHHDR *) location;
 
 	return hash_create(name, init_size, infoP, hash_flags);
+}
+
+void getmemPointer()
+{
+	ereport(LOG, (errmsg("ShmemIndex  ShmemIndex is %ld \n", ShmemIndex)));
+	return ;
 }
 
 /*

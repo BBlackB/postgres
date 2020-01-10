@@ -3643,7 +3643,9 @@ PostgresMain(int argc, char *argv[],
 	char socket_path[128];
 	// 用于测试的消息
 	const int BUFFER_SIZE = 1024;
+	char message[BUFFER_SIZE];
 	const char *test_message = "Hello, this is the message from postgres by unix socket.";
+	StringInfoData test_messagebuf;
 
 	/* Initialize startup process environment if necessary. */
 	if (!IsUnderPostmaster)
@@ -4034,7 +4036,22 @@ PostgresMain(int argc, char *argv[],
 		ereport(WARNING, (errmsg("connect to unix socket failed.")));
 	}
 	else
-		send(sock_fd, test_message, strlen(test_message), 0);
+	{
+		initStringInfo(&test_messagebuf);
+		pq_sendbyte(&test_messagebuf, 'T'); // msg type
+		pq_sendint64(&test_messagebuf, 1); // msg 个数
+		pq_sendint64(&test_messagebuf, 0); // fpw_lsn
+		pq_sendint64(&test_messagebuf, 0); // curinsert_flag
+		pq_sendint64(&test_messagebuf, strlen(test_message)); // 消息长度
+		pq_sendstring(&test_messagebuf, test_message);
+
+		memcpy(message, test_messagebuf.data, test_messagebuf.len);
+		message[test_messagebuf.len] = '\0';
+
+		ereport(LOG, (errmsg("send message: %s", message)));
+		send(sock_fd, test_messagebuf.data, test_messagebuf.len, 0);
+		// send(sock_fd, test_message, strlen(test_message), 0);
+	}
 
 	/*
 	 * Non-error queries loop here.

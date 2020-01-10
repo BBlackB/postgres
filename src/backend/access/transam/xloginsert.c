@@ -457,6 +457,9 @@ XLogInsert(RmgrId rmid, uint8 info)
 		StringInfoData output_message;
 		StringInfoData tmpbuf;
 		int total_num = 0;
+		const int BUFFER_SIZE = 1024;
+		char tmp_data[BUFFER_SIZE];
+		int remote_endpos = 0;
 
 		/*
 		 * Get values needed to decide whether to do full-page writes. Since
@@ -479,19 +482,30 @@ XLogInsert(RmgrId rmid, uint8 info)
 		pq_sendint64(&output_message, curinsert_flags);
 		for (;rrdt != NULL; rrdt = rrdt->next)
 		{			
-			ereport(LOG, (errmsg("XLogRecData data = %s, lenth = %d", rrdt->data, rrdt->len)));
+			memcpy(tmp_data, rrdt->data, rrdt->len);
+			tmp_data[rrdt->len] = '\0';
+			// ereport(LOG, (errmsg("output_message.lenth = %d", output_message.len)));
+			// ereport(LOG, (errmsg("XLogRecData rrdt->data = %s, rrdt->lenth = %d", rrdt->data, rrdt->len)));
+			// ereport(LOG, (errmsg("XLogRecData data = %s, lenth = %d", tmp_data, strlen(tmp_data))));
+
 			pq_sendint64(&output_message, rrdt->len);
-			pq_sendstring(&output_message, rrdt->data);
-			output_message.len += rrdt->len;
+			pq_sendbytes(&output_message, rrdt->data, rrdt->len);
 			total_num++;
+			// ereport(LOG, (errmsg("output_message.lenth = %d", output_message.len)));
 		}
+		// 给出有多少个节点
 		output_message.data[output_message.len] = '\0';
 		pq_sendint64(&tmpbuf, total_num);
 		memcpy(&output_message.data[1], tmpbuf.data, sizeof(int64));
 
+		// ereport(LOG, (errmsg("ready send message: total_num = %d, fpw_lsn = %d, curinsert_flags = %d, data = %s, lenth = %d", total_num, fpw_lsn, curinsert_flags,  output_message.data, output_message.len)));
+
 		// send(sock_fd, output_message.data, output_message.len, 0);
+		// recv(sock_fd, &EndPos, sizeof(EndPos), 0);
 
 		EndPos = XLogInsertRecord(rdt, fpw_lsn, curinsert_flags);
+
+		ereport(LOG, (errmsg("EndPos = %d", EndPos)));
 	} while (EndPos == InvalidXLogRecPtr);
 
 	XLogResetInsertion();

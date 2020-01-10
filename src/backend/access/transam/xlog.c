@@ -75,6 +75,7 @@
 #include "utils/snapmgr.h"
 #include "utils/timestamp.h"
 #include "pg_trace.h"
+#include "libpq/pqformat.h"
 
 extern uint32 bootstrap_data_checksum_version;
 
@@ -772,6 +773,8 @@ static const char *xlogSourceNames[] = {"any", "archive", "pg_wal", "stream"};
  * used to write the XLOG, and so will normally refer to the active segment.
  */
 static int	openLogFile = -1;
+// NOTE:发送给存储端的sock fd
+extern int sock_fd;
 static XLogSegNo openLogSegNo = 0;
 static uint32 openLogOff = 0;
 
@@ -2441,6 +2444,7 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			/* create/use new log file */
 			use_existent = true;
 			openLogFile = XLogFileInit(openLogSegNo, &use_existent, true);
+			ereport(LOG, (errmsg("************************** XLOGFILEINIT **************")));
 			openLogOff = 0;
 		}
 
@@ -2450,6 +2454,7 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
 							wal_segment_size);
 			openLogFile = XLogFileOpen(openLogSegNo);
+			ereport(LOG, (errmsg("************************** XLOGFILEOPEN **************")));
 			openLogOff = 0;
 		}
 
@@ -2462,6 +2467,20 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 											wal_segment_size);
 		}
 		npages++;
+		
+		// 发送到存储端
+		{
+			StringInfoData writeRqstbuf;
+			initStringInfo(&writeRqstbuf);
+
+			pq_sendbyte(&writeRqstbuf, 'S'); // 修改存储端的文件偏移
+			pq_sendint64(&writeRqstbuf, WriteRqst.Write);
+			pq_sendint64(&writeRqstbuf, WriteRqst.Flush);
+			pq_sendint64(&writeRqstbuf, startoffset);
+			ereport(LOG, (errmsg("executor: WriteRqst.Write = %d, WriteRqst.Flush = %d, startoffset = %d", WriteRqst.Write, WriteRqst.Flush, startoffset)));
+
+			send(sock_fd, writeRqstbuf.data, writeRqstbuf.len, 0);
+		}
 
 		/*
 		 * Dump the set if this will be the last loop iteration, or if we are
@@ -2503,7 +2522,30 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			{
 				errno = 0;
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = write(openLogFile, from, nleft);
+				// written = write(openLogFile, from, nleft);
+				
+				if (sock_fd == -1)
+				{
+					ereport(LOG, (errmsg("sock_fd is not valid!")));
+					written = write(openLogFile, from, nleft);
+				}
+				else // 通过socket发送给存储端
+				{
+					StringInfoData tmpmsg;
+					initStringInfo(&tmpmsg);
+					pq_sendbyte(&tmpmsg, 'X'); // 直接写入文件
+					pq_sendint64(&tmpmsg, nleft);
+					pq_sendbytes(&tmpmsg, from, nleft);
+
+					written = write(sock_fd, tmpmsg.data, tmpmsg.len);
+					if (written > 0)
+						ereport(LOG, (errmsg("executor send to storage: %d", written)));
+					else
+						ereport(LOG, (errmsg("executor send to storage error(errno = %d)", errno)));
+
+					read(sock_fd, &written, sizeof written);
+					ereport(LOG, (errmsg("remote write %d", written)));
+				}
 				pgstat_report_wait_end();
 				if (written <= 0)
 				{
@@ -2929,6 +2971,7 @@ XLogFlush(XLogRecPtr record)
 		WriteRqst.Write = insertpos;
 		WriteRqst.Flush = insertpos;
 
+		// NOTE:不在服务进程中写xlog日志
 		XLogWrite(WriteRqst, false);
 
 		LWLockRelease(WALWriteLock);
@@ -2962,11 +3005,11 @@ XLogFlush(XLogRecPtr record)
 	 * calls from bufmgr.c are not within critical sections and so we will not
 	 * force a restart for a bad LSN on a data page.
 	 */
-	if (LogwrtResult.Flush < record)
-		elog(ERROR,
-			 "xlog flush request %X/%X is not satisfied --- flushed only to %X/%X",
-			 (uint32) (record >> 32), (uint32) record,
-			 (uint32) (LogwrtResult.Flush >> 32), (uint32) LogwrtResult.Flush);
+	// if (LogwrtResult.Flush < record)
+	// 	elog(ERROR,
+	// 		 "xlog flush request %X/%X is not satisfied --- flushed only to %X/%X",
+	// 		 (uint32) (record >> 32), (uint32) record,
+	// 		 (uint32) (LogwrtResult.Flush >> 32), (uint32) LogwrtResult.Flush);
 }
 
 /*

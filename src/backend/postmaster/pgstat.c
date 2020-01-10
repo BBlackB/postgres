@@ -606,6 +606,8 @@ retry2:
 		}
 	}
 
+	// ereport(LOG, (errmsg("In pgstat_init: pgStatSock = %d", pgStatSock)));
+
 	pg_freeaddrinfo_all(hints.ai_family, addrs);
 
 	return;
@@ -4345,6 +4347,8 @@ PgstatCollectorMain(int argc, char *argv[])
 #ifdef WIN32
 			pgwin32_noblock = 1;
 #endif
+
+			// ereport(LOG, (errmsg("In pgstat: pgStatSock = %d", pgStatSock)));
 
 			len = recv(pgStatSock, (char *) &msg,
 					   sizeof(PgStat_Msg), 0);
